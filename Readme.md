@@ -1,35 +1,102 @@
-# 🚀 FastAPI Backend Deployment on Azure VM  
-This guide explains how to deploy and run the Python (FastAPI) backend application on an Azure Virtual Machine using GitHub Actions and simple SSH-based deployment.
+# 🚀 Deploying Python FastAPI Application on Azure VM (Ubuntu 20.04)
+
+This guide explains how to deploy and run a **Python FastAPI backend** on an **Azure Ubuntu 20.04 VM**, using **pyodbc + Microsoft SQL Server**, **systemd**, and **GitHub Actions CI/CD**.
 
 ---
 
-## 📌 Prerequisites
-Before deployment, ensure the following are ready:
+# 📌 Prerequisites
 
-### **1. Azure VM (Ubuntu 20.04 or above)**
-- The backend VM must be created and accessible via SSH.
-- Public IP must be available for GitHub Actions to connect.
+Ensure your VM was created using:
 
-### **2. Python Installed**
-Check version:
-
-```bash
-python3 --version
+```hcl
+source_image_reference = {
+  publisher = "Canonical"
+  offer     = "0001-com-ubuntu-server-focal"
+  sku       = "20_04-lts"
+  version   = "latest"
+}
 ```
 
-### **3. Install pip (if missing)**
-If pip is missing, fix repository index and install:
+Your VM must have:
+
+- Python 3.8+
+- pip
+- curl
+- unixODBC
+- msodbcsql18 (SQL Server ODBC Driver)
+- GitHub Actions SSH key access
+
+---
+
+# 🔧 Step 1 — Connect to VM
+
+```bash
+ssh -i ~/.ssh/vm-ssh-private-key adminuser@<VM_PUBLIC_IP>
+```
+
+---
+
+# 🔧 Step 2 — Install Required System Packages
 
 ```bash
 sudo apt update
-sudo apt install python3-pip -y
+sudo apt install -y curl gnupg2 unixodbc unixodbc-dev
 ```
 
 ---
 
-## 📁 Directory Setup on VM (One-Time Setup)
+# 🔧 Step 3 — Install Microsoft SQL Server ODBC Driver (msodbcsql18)
 
-SSH into the VM:
+```bash
+
+sudo su
+
+apt-get update
+apt-get install -y curl gnupg2
+
+curl https://packages.microsoft.com/keys/microsoft.asc | apt-key add -
+
+curl https://packages.microsoft.com/config/ubuntu/20.04/prod.list \
+    > /etc/apt/sources.list.d/mssql-release.list
+
+apt-get update
+ACCEPT_EULA=Y apt-get install -y msodbcsql18 unixodbc unixodbc-dev
+
+
+odbcinst -q -d #it should show [ODBC Driver 18 for SQL Server]
+
+```
+
+Verify installation:
+
+```bash
+odbcinst -q -d
+```
+
+You should see:
+
+```
+[ODBC Driver 18 for SQL Server]
+```
+
+---
+
+# 🐍 Step 4 — Install Python & pip
+
+```bash
+sudo apt install -y python3 python3-pip
+```
+
+Verify:
+
+```bash
+python3 --version
+pip3 --version
+```
+
+---
+
+# 🗂 Step 5 — Create Backend Directory on VM
 
 ```bash
 sudo mkdir -p /var/www/backendapp
@@ -38,46 +105,9 @@ sudo chmod -R 777 /var/www/backendapp
 
 ---
 
-## 🔧 Install SQL Server ODBC Driver (One-Time Setup)
+# 🔧 Step 6 — Setup systemd Service (Auto-Start Backend)
 
-FastAPI connects to Azure SQL using **pyodbc**, so install ODBC driver:
-
-```bash
-sudo apt update
-sudo apt install -y curl gnupg2 unixodbc unixodbc-dev
-
-curl -fsSL https://packages.microsoft.com/keys/microsoft.asc | \
-    gpg --dearmor -o /usr/share/keyrings/microsoft.gpg
-
-echo "deb [arch=amd64 signed-by=/usr/share/keyrings/microsoft.gpg] \
-https://packages.microsoft.com/ubuntu/20.04/prod focal main" \
-| sudo tee /etc/apt/sources.list.d/mssql-release.list
-
-sudo apt update
-sudo ACCEPT_EULA=Y sudo apt install -y msodbcsql18
-```
-
----
-
-## 🔐 Add SSH Keys to GitHub
-
-In GitHub:
-
-**Settings → Secrets and Variables → Actions → New Repository Secret**
-
-Add:
-
-| Secret Name | Value |
-|------------|--------|
-| `SSH_HOST` | `<Your-VM-IP>` |
-| `SSH_USER` | `ubuntu` |
-| `SSH_KEY`  | Private SSH Key from your VM |
-
----
-
-## ⚙️ Create Systemd Service (Auto-start backend)
-
-On the VM:
+Create service:
 
 ```bash
 sudo nano /etc/systemd/system/backend.service
@@ -91,7 +121,7 @@ Description=FastAPI Backend Service
 After=network.target
 
 [Service]
-User=ubuntu
+User=adminuser
 WorkingDirectory=/var/www/backendapp
 ExecStart=/usr/bin/python3 /var/www/backendapp/app.py
 Restart=always
@@ -100,139 +130,132 @@ Restart=always
 WantedBy=multi-user.target
 ```
 
-Enable service:
+Enable & start:
 
 ```bash
 sudo systemctl daemon-reload
 sudo systemctl enable backend
+sudo systemctl restart backend
+sudo systemctl status backend
 ```
 
 ---
 
-## 📦 GitHub Actions Deployment Pipeline
+# 🔄 Step 7 — GitHub Actions CI/CD Deployment
 
-Create file:
+Create this file:
 
-`.github/workflows/deploy.yml`
-
-Paste this exact pipeline:
+**`.github/workflows/deploy.yml`**
 
 ```yaml
 name: Deploy Backend to Azure VM
 
 on:
   push:
-    branches:
-      - main
+    branches: ["main"]
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout Code
+      - name: Checkout
         uses: actions/checkout@v3
 
-      - name: Zip Project
-        run: zip -r app.zip . -x "*.git*"
+      - name: Zip project
+        run: zip -r backend.zip . -x "*.git*"
 
-      - name: Copy Files to Azure VM
+      - name: Copy to VM
         uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_KEY }}
-          port: 22
-          source: "app.zip"
+          source: "backend.zip"
           target: "/var/www/backendapp/"
 
-      - name: Run Deployment Script on VM
-        uses: appleboy/ssh-action@v0.1.6
+      - name: Run deployment commands on VM
+        uses: appleboy/ssh-action@v0.1.7
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_KEY }}
-          port: 22
           script: |
             cd /var/www/backendapp
-            unzip -o app.zip
-
             sudo apt update
-            sudo apt install -y unixodbc unixodbc-dev curl gnupg2
 
-            if ! dpkg -s msodbcsql18 > /dev/null 2>&1; then
-              curl -fsSL https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor > microsoft.gpg
-              sudo install -o root -g root -m 644 microsoft.gpg /usr/share/keyrings/
-              echo "deb [signed-by=/usr/share/keyrings/microsoft.gpg] https://packages.microsoft.com/ubuntu/20.04/prod focal main" |
-                sudo tee /etc/apt/sources.list.d/msprod.list
-              sudo apt update
-              sudo ACCEPT_EULA=Y apt install -y msodbcsql18
+            # Install unzip if missing
+            if ! command -v unzip &> /dev/null
+            then
+              sudo apt install -y unzip
             fi
 
-            pip install -r requirements.txt
-
+            unzip -o backend.zip
+            pip3 install -r requirements.txt
             sudo systemctl restart backend
-            sudo systemctl status backend --no-pager
 ```
 
 ---
 
-## 🧪 Testing Backend After Deployment
+# 🔐 GitHub Secrets Required
 
-Run:
+Go to:
+
+**GitHub → Repo → Settings → Secrets → Actions**
+
+Add:
+
+| Secret Name | Value |
+|------------|--------|
+| `SSH_HOST` | VM Public IP |
+| `SSH_USER` | adminuser |
+| `SSH_KEY`  | Private SSH key (~/.ssh/vm-ssh-private-key) |
+
+---
+
+# 🧪 Step 8 — Test Deployment
+
+SSH into VM:
 
 ```bash
-curl http://<VM-PUBLIC-IP>:8000
+sudo systemctl status backend
+sudo journalctl -u backend -n 50
 ```
 
-Test DB connection endpoint:
+Test API:
 
 ```bash
-curl http://<VM-PUBLIC-IP>:8000/api/tasks
+curl http://localhost:8000/api
 ```
 
-If the connection string is correct → app will respond successfully.
+Or from browser:
 
----
-
-## 🗄️ Updating SQL Connection String
-
-Edit `app.py`:
-
-```python
-connection_string = (
-    "Driver={ODBC Driver 18 for SQL Server};"
-    "Server=tcp:<YOUR-SQL-SERVER>.database.windows.net,1433;"
-    "Database=<DBNAME>;"
-    "Uid=<USERNAME>;"
-    "Pwd=<PASSWORD>;"
-    "Encrypt=yes;"
-    "TrustServerCertificate=no;"
-    "Connection Timeout=30;"
-)
+```
+http://<VM_PUBLIC_IP>:8000
 ```
 
 ---
 
-## 🎉 Deployment Flow Summary
+# 🔗 API Endpoints
 
-1. Push code to `main`  
-2. GitHub Action zips project  
-3. SCP uploads to Azure VM  
-4. VM installs dependencies  
-5. Systemd service restarts  
-6. Latest version goes live instantly  
-
----
-
-## 📞 Support
-
-If deployment fails, check:
-
-```bash
-sudo journalctl -u backend -f
-```
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/` | Create tables |
+| GET | `/api/tasks` | List tasks |
+| GET | `/api/tasks/{id}` | Get task |
+| POST | `/api/tasks` | Create |
+| PUT | `/api/tasks/{id}` | Update |
+| DELETE | `/api/tasks/{id}` | Delete |
 
 ---
 
-# ✅ Done — Your backend deployment documentation is complete and production-ready.
+# ✅ Conclusion
+
+You now have:
+
+✔ FastAPI backend running on Azure VM  
+✔ Connected to SQL Server using pyodbc  
+✔ GitHub Actions CI/CD for auto deployment  
+✔ systemd service for auto restart  
+
+Feel free to extend the project, add monitoring, logging, or front-end integrations.
