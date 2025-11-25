@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # connection_string = os.getenv("CONNECTION_STRING")
-connection_string = "UPDATE CONNECTION STRING HERE"
+connection_string = "Driver={ODBC Driver 18 for SQL Server};Server=tcp:sqlservertodoappdev.database.windows.net,1433;Database=sqldb-todoapp-dev;Uid=sqladminuser;Pwd=Abcd1234!;Encrypt=yes;TrustServerCertificate=no;Connection Timeout=30;"
 
 app = FastAPI()
 

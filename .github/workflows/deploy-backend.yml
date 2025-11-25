@@ -1,0 +1,61 @@
+name: Deploy Backend to Azure VM
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Zip backend code
+        run: zip -r backend.zip . -x "*.git*"
+
+      - name: Copy to Azure VM
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          port: 22
+          source: "backend.zip"
+          target: "/var/www/backendapp/"
+
+      - name: Deploy on Azure VM
+        uses: appleboy/ssh-action@v0.1.6
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          port: 22
+          script: |
+            echo ">>> Updating backend code..."
+            cd /var/www/backendapp
+            unzip -o backend.zip
+
+            echo ">>> Installing system dependencies..."
+            sudo apt-get update
+            sudo apt-get install -y unixodbc unixodbc-dev curl gnupg2
+
+            echo ">>> Installing SQL Server ODBC Driver..."
+            if ! dpkg -s msodbcsql18 >/dev/null 2>&1; then
+              curl https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor > microsoft.gpg
+              sudo install -o root -g root -m 644 microsoft.gpg /usr/share/keyrings/
+              sudo sh -c 'echo "deb [signed-by=/usr/share/keyrings/microsoft.gpg] https://packages.microsoft.com/ubuntu/20.04/prod focal main" > /etc/apt/sources.list.d/msprod.list'
+              sudo apt-get update
+              sudo ACCEPT_EULA=Y apt-get install -y msodbcsql18
+            fi
+
+            echo ">>> Installing Python dependencies..."
+            pip install -r requirements.txt
+
+            echo ">>> Restarting backend service..."
+            sudo systemctl restart backend
+            sudo systemctl status backend --no-pager
+
+            echo ">>> DEPLOYMENT COMPLETE!"
